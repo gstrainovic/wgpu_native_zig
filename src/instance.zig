@@ -13,7 +13,6 @@ const RequestAdapterCallbackInfo = _adapter.RequestAdapterCallbackInfo;
 const RequestAdapterCallback = _adapter.RequestAdapterCallback;
 const RequestAdapterError = _adapter.RequestAdapterError;
 const BackendType = _adapter.BackendType;
-const MakeRequestAdapterCallbackTrampoline = _adapter.MakeRequestAdapterCallbackTrampoline;
 
 const _surface = @import("surface.zig");
 const Surface = _surface.Surface;
@@ -328,11 +327,14 @@ pub const Instance = opaque {
     pub fn requestAdapterSync(self: *Instance, options: ?RequestAdapterOptions, polling_interval_nanoseconds: u64) InstanceError!*Adapter {
         var adapter_response: ?RequestAdapterError!*Adapter = null;
 
-        const adapter_future = self.requestAdapter(
-            null,
+        const callback_info = RequestAdapterCallbackInfo.init(
+            null, 
             &adapter_response,
             defaultAdapterCallback,
+        );
+        const adapter_future = self.requestAdapter(
             options,
+            callback_info,
         );
 
         // TODO: Revisit once Instance.waitAny() is implemented in wgpu-native,
@@ -350,21 +352,9 @@ pub const Instance = opaque {
 
     pub fn requestAdapter(
         self: *Instance,
-        mode: ?CallbackMode,
-        userdata: anytype,
-        callback: *const fn(RequestAdapterError!*Adapter, ?[]const u8, @TypeOf(userdata)) void,
         options: ?RequestAdapterOptions,
+        callback_info: RequestAdapterCallbackInfo,
     ) Future {
-        if (@typeInfo(@TypeOf(userdata)) != .pointer) {
-            @compileError("userdata should be a pointer type");
-        }
-        const Trampoline = MakeRequestAdapterCallbackTrampoline(@TypeOf(userdata));
-        const callback_info = RequestAdapterCallbackInfo {
-            .mode = mode orelse CallbackMode.allow_process_events,
-            .callback = Trampoline.callback,
-            .userdata1 = @ptrCast(userdata),
-            .userdata2 = @constCast(@ptrCast(callback)),
-        };
         if (options) |o| {
             return wgpuInstanceRequestAdapter(self, &o.toWGPU(), callback_info);
         } else {

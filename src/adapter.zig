@@ -24,7 +24,6 @@ const WGPUDeviceDescriptor = _device.WGPUDeviceDescriptor;
 const WGPUDeviceExtras = _device.WGPUDeviceExtras;
 const RequestDeviceCallbackInfo = _device.RequestDeviceCallbackInfo;
 const RequestDeviceError = _device.RequestDeviceError;
-const MakeRequestDeviceCallbackTrampoline = _device.MakeRequestDeviceCallbackTrampoline;
 
 const _async = @import("async.zig");
 const CallbackMode = _async.CallbackMode;
@@ -156,6 +155,41 @@ pub const RequestAdapterCallbackInfo = extern struct {
     callback: RequestAdapterCallback,
     userdata1: ?*anyopaque = null,
     userdata2: ?*anyopaque = null,
+
+    pub fn init(
+        mode: ?CallbackMode,
+        userdata: anytype,
+        callback: *const fn(RequestAdapterError!*Adapter, message: ?[]const u8, _userdata: @TypeOf(userdata)) void,
+    ) RequestAdapterCallbackInfo {
+        const UserDataType = @TypeOf(userdata);
+        const CallbackType = @TypeOf(callback);
+        if (@typeInfo(UserDataType) != .pointer) {
+            @compileError("userdata should be a pointer type");
+        }
+        const Trampoline = struct {
+            fn cb(status: RequestAdapterStatus, adapter: ?*Adapter, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
+                const wrapped_callback: CallbackType = @ptrCast(userdata2);
+                const _userdata: UserDataType = @ptrCast(@alignCast(userdata1));
+                const response: RequestAdapterError!*Adapter = switch (status) {
+                    .success => adapter.?,
+                    .instance_dropped => RequestAdapterError.RequestAdapterInstanceDropped,
+                    .unavailable => RequestAdapterError.RequestAdapterUnavailable,
+                    .@"error" => RequestAdapterError.RequestAdapterError,
+                    .unknown => RequestAdapterError.RequestAdapterUnknown,
+                };
+                wrapped_callback(response, message.toSlice(), _userdata);
+            }
+        };
+
+        return RequestAdapterCallbackInfo {
+            // TODO: Revisit this default if/when Instance.waitAny() is implemented.
+            .mode = mode orelse CallbackMode.allow_process_events,
+
+            .callback = Trampoline.cb,
+            .userdata1 = @ptrCast(userdata),
+            .userdata2 = @constCast(@ptrCast(callback)),
+        };
+    }
 };
 
 // TODO: This should maybe be relocated to instance.zig; it is only used there.
@@ -167,25 +201,6 @@ pub const RequestAdapterCallback = *const fn(
     userdata2: ?*anyopaque,
 ) callconv(.C) void;
 
-pub fn MakeRequestAdapterCallbackTrampoline(
-    comptime UserDataPointerType: type,
-) type {
-    const CallbackType = *const fn(RequestAdapterError!*Adapter, ?[]const u8, UserDataPointerType) void;
-    return struct {
-        pub fn callback(status: RequestAdapterStatus, adapter: ?*Adapter, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
-            const wrapped_callback: CallbackType = @ptrCast(userdata2);
-            const userdata: UserDataPointerType = @ptrCast(@alignCast(userdata1));
-            const response: RequestAdapterError!*Adapter = switch (status) {
-                .success => adapter.?,
-                .instance_dropped => RequestAdapterError.RequestAdapterInstanceDropped,
-                .unavailable => RequestAdapterError.RequestAdapterUnavailable,
-                .@"error" => RequestAdapterError.RequestAdapterError,
-                .unknown => RequestAdapterError.RequestAdapterUnknown,
-            };
-            wrapped_callback(response, message.toSlice(), userdata);
-        }
-    };
-}
 
 extern fn wgpuAdapterInfoFreeMembers(adapter_info: WGPUAdapterInfo) void;
 
@@ -293,11 +308,14 @@ pub const Adapter = opaque{
     pub fn requestDeviceSync(self: *Adapter, instance: *Instance, descriptor: ?DeviceDescriptor, polling_interval_nanoseconds: u64) AdapterError!*Device {
         var device_response: ?RequestDeviceError!*Device = null;
 
-        const device_future = self.requestDevice(
+        const callback_info = RequestDeviceCallbackInfo.init(
             null,
             &device_response,
             defaultDeviceCallback,
+        );
+        const device_future = self.requestDevice(
             descriptor,
+            callback_info,
         );
 
         // TODO: Revisit once Instance.waitAny() is implemented in wgpu-native,
@@ -314,22 +332,9 @@ pub const Adapter = opaque{
 
     pub fn requestDevice(
         self: *Adapter,
-        mode: ?CallbackMode,
-        userdata: anytype,
-        callback: *const fn(RequestDeviceError!*Device, ?[]const u8, @TypeOf(userdata)) void,
         descriptor: ?DeviceDescriptor,
+        callback_info: RequestDeviceCallbackInfo,
     ) Future {
-        if (@typeInfo(@TypeOf(userdata)) != .pointer) {
-            @compileError("userdata should be a pointer type");
-        }
-        const Trampoline = MakeRequestDeviceCallbackTrampoline(@TypeOf(userdata));
-        const callback_info = RequestDeviceCallbackInfo {
-            .mode = mode orelse CallbackMode.allow_process_events,
-            .callback = Trampoline.callback,
-            .userdata1 = @ptrCast(userdata),
-            .userdata2 = @constCast(@ptrCast(callback)),
-        };
-
         if(descriptor) |d| {
             return wgpuAdapterRequestDevice(self, &d.toWGPU(), callback_info);
         } else {
