@@ -77,20 +77,6 @@ pub const DeviceLostReason = enum(u32) {
     failed_creation  = 0x00000004,
 };
 
-pub const DeviceLostCallbackInfo = extern struct {
-    next_in_chain: ?*ChainedStruct = null,
-
-    // Apparently in the webgpu header this has no (valid) default: https://github.com/webgpu-native/webgpu-headers/pull/471
-    // As of wgpu-native v24.0.3.1, Instance.waitAny() has not been implemented, but Instance.processEvents() has,
-    // so the safest mode to use currently is probably CallbackMode.allow_process_events.
-    // If you really know what you're doing, CallbackMode.allow_spontaneous could also work as an option here.
-    // TODO: Revisit this if/when Instance.waitAny() is implemented in wgpu-native
-    mode: CallbackMode = CallbackMode.allow_process_events,
-    callback: DeviceLostCallback = defaultDeviceLostCallback,
-    userdata1: ?*anyopaque = null,
-    userdata2: ?*anyopaque = null,
-};
-
 // `device` is a reference to the device which was lost. If, and only if, the `reason` is DeviceLostReason.failed_creation, `device` is a non-null pointer to a null Device.
 pub const DeviceLostCallback = *const fn(device: *const ?*Device, reason: DeviceLostReason, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void;
 pub fn defaultDeviceLostCallback(device: *const ?*Device, reason: DeviceLostReason, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
@@ -105,31 +91,46 @@ pub fn defaultDeviceLostCallback(device: *const ?*Device, reason: DeviceLostReas
     std.debug.panic("Device lost: reason={s} message=\"{s}\"\n", .{ @tagName(reason), message.toSlice() orelse "" });
 }
 
-pub fn deviceLostCallbackInfo(
-    userdata: anytype,
-    callback: *const fn(device: *const ?*Device, reason: DeviceLostReason, message: ?[]const u8, _userdata: @TypeOf(userdata)) void,
-) DeviceLostCallbackInfo {
-    const UserDataType = @TypeOf(userdata);
-    const CallbackType = @TypeOf(callback);
-    if (@typeInfo(UserDataType) != .pointer) {
-        @compileError("userdata should be a pointer type");
-    }
-    const Trampoline = struct {
-        fn cb(device: *const ?*Device, reason: DeviceLostReason, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
-            const wrapped_callback: CallbackType = @ptrCast(userdata2);
-            const _userdata: UserDataType = @ptrCast(@alignCast(userdata1));
-            wrapped_callback(device, reason, message.toSlice(), _userdata);
+pub const DeviceLostCallbackInfo = extern struct {
+    next_in_chain: ?*ChainedStruct = null,
+
+    // Apparently in the webgpu header this has no (valid) default: https://github.com/webgpu-native/webgpu-headers/pull/471
+    // As of wgpu-native v24.0.3.1, Instance.waitAny() has not been implemented, but Instance.processEvents() has,
+    // so the safest mode to use currently is probably CallbackMode.allow_process_events.
+    // If you really know what you're doing, CallbackMode.allow_spontaneous could also work as an option here.
+    // TODO: Revisit this if/when Instance.waitAny() is implemented in wgpu-native
+    mode: CallbackMode = CallbackMode.allow_process_events,
+    callback: DeviceLostCallback = defaultDeviceLostCallback,
+    userdata1: ?*anyopaque = null,
+    userdata2: ?*anyopaque = null,
+
+    pub fn init(
+        userdata: anytype,
+        callback: *const fn(device: *const ?*Device, reason: DeviceLostReason, message: ?[]const u8, _userdata: @TypeOf(userdata)) void,
+    ) DeviceLostCallbackInfo {
+        const UserDataType = @TypeOf(userdata);
+        const CallbackType = @TypeOf(callback);
+        if (@typeInfo(UserDataType) != .pointer) {
+            @compileError("userdata should be a pointer type");
         }
-    };
+        const Trampoline = struct {
+            fn cb(device: *const ?*Device, reason: DeviceLostReason, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
+                const wrapped_callback: CallbackType = @ptrCast(userdata2);
+                const _userdata: UserDataType = @ptrCast(@alignCast(userdata1));
+                wrapped_callback(device, reason, message.toSlice(), _userdata);
+            }
+        };
 
-    return DeviceLostCallbackInfo {
-        .callback = Trampoline.cb,
-        .userdata1 = @ptrCast(userdata),
-        .userdata2 = @constCast(@ptrCast(callback)),
-    };
-}
+        return DeviceLostCallbackInfo {
+            .callback = Trampoline.cb,
+            .userdata1 = @ptrCast(userdata),
+            .userdata2 = @constCast(@ptrCast(callback)),
+        };
+    }
+};
 
-test "deviceLostCallbackInfo constructs valid DeviceLostCallbackInfo struct with custom callback" {
+
+test "DeviceLostCallbackInfo.init() constructs valid DeviceLostCallbackInfo struct with custom callback" {
     const CBStruct = struct {
         fn cb(device: *const ?*Device, reason: DeviceLostReason, message: ?[]const u8, userdata: *bool) void {  
             userdata.* = true;
@@ -141,7 +142,7 @@ test "deviceLostCallbackInfo constructs valid DeviceLostCallbackInfo struct with
 
     var callback_called = false;
     const not_device: ?*Device = null;
-    const cb_info = deviceLostCallbackInfo(&callback_called, CBStruct.cb);
+    const cb_info = DeviceLostCallbackInfo.init(&callback_called, CBStruct.cb);
     cb_info.callback(&not_device, .unknown, StringView.fromSlice(""), cb_info.userdata1, cb_info.userdata2);
     try std.testing.expect(callback_called);
 }
@@ -185,33 +186,34 @@ pub const UncapturedErrorCallbackInfo = extern struct {
     callback: UncapturedErrorCallback = defaultUncapturedErrorCallback,
     userdata1: ?*anyopaque = null,
     userdata2: ?*anyopaque = null,
+
+    pub fn init(
+        userdata: anytype,
+        callback: *const fn(device: ?*Device, error_type: ErrorType, message: ?[]const u8, _userdata: @TypeOf(userdata)) void,
+    ) UncapturedErrorCallbackInfo {
+        const UserDataType = @TypeOf(userdata);
+        const CallbackType = @TypeOf(callback);
+        if (@typeInfo(UserDataType) != .pointer) {
+            @compileError("userdata should be a pointer type");
+        }
+        const Trampoline = struct {
+            fn cb(device: ?*Device, error_type: ErrorType, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
+                const wrapped_callback: CallbackType = @ptrCast(userdata2);
+                const _userdata: UserDataType = @ptrCast(@alignCast(userdata1));
+                wrapped_callback(device, error_type, message.toSlice(), _userdata);
+            }
+        };
+
+        return UncapturedErrorCallbackInfo {
+            .callback = Trampoline.cb,
+            .userdata1 = @ptrCast(userdata),
+            .userdata2 = @constCast(@ptrCast(callback)),
+        };
+    }
 };
 
-pub fn uncapturedErrorCallbackInfo(
-    userdata: anytype,
-    callback: *const fn(device: ?*Device, error_type: ErrorType, message: ?[]const u8, _userdata: @TypeOf(userdata)) void,
-) UncapturedErrorCallbackInfo {
-    const UserDataType = @TypeOf(userdata);
-    const CallbackType = @TypeOf(callback);
-    if (@typeInfo(UserDataType) != .pointer) {
-        @compileError("userdata should be a pointer type");
-    }
-    const Trampoline = struct {
-        fn cb(device: ?*Device, error_type: ErrorType, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
-            const wrapped_callback: CallbackType = @ptrCast(userdata2);
-            const _userdata: UserDataType = @ptrCast(@alignCast(userdata1));
-            wrapped_callback(device, error_type, message.toSlice(), _userdata);
-        }
-    };
 
-    return UncapturedErrorCallbackInfo {
-        .callback = Trampoline.cb,
-        .userdata1 = @ptrCast(userdata),
-        .userdata2 = @constCast(@ptrCast(callback)),
-    };
-}
-
-test "uncapturedErrorCallbackInfo constructs valid UncapturedErrorCallbackInfo struct with custom callback" {
+test "UncapturedErrorCallbackInfo.init() constructs valid UncapturedErrorCallbackInfo struct with custom callback" {
     const CBStruct = struct {
         fn cb(device: ?*Device, error_type: ErrorType, message: ?[]const u8, userdata: *bool) void {  
             userdata.* = true;
@@ -222,7 +224,7 @@ test "uncapturedErrorCallbackInfo constructs valid UncapturedErrorCallbackInfo s
     };
 
     var callback_called = false;
-    const cb_info = uncapturedErrorCallbackInfo(&callback_called, CBStruct.cb);
+    const cb_info = UncapturedErrorCallbackInfo.init(&callback_called, CBStruct.cb);
     cb_info.callback(null, .unknown, StringView.fromSlice(""), cb_info.userdata1, cb_info.userdata2);
     try std.testing.expect(callback_called);
 }
@@ -324,26 +326,42 @@ pub const RequestDeviceCallbackInfo = extern struct {
     callback: RequestDeviceCallback,
     userdata1: ?*anyopaque = null,
     userdata2: ?*anyopaque = null,
+
+    pub fn init(
+        mode: ?CallbackMode,
+        userdata: anytype,
+        callback: *const fn(RequestDeviceError!*Device, message: ?[]const u8, _userdata: @TypeOf(userdata)) void,
+    ) RequestDeviceCallbackInfo {
+        const UserDataType = @TypeOf(userdata);
+        const CallbackType = @TypeOf(callback);
+        if (@typeInfo(UserDataType) != .pointer) {
+            @compileError("userdata should be a pointer type");
+        }
+        const Trampoline = struct {
+            fn cb(status: RequestDeviceStatus, device: ?*Device, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
+                const wrapped_callback: CallbackType = @ptrCast(userdata2);
+                const _userdata: UserDataType = @ptrCast(@alignCast(userdata1));
+                const response: RequestDeviceError!*Device = switch (status) {
+                    .success => device.?,
+                    .instance_dropped => RequestDeviceError.RequestDeviceInstanceDropped,
+                    .@"error" => RequestDeviceError.RequestDeviceError,
+                    .unknown => RequestDeviceError.RequestDeviceUnknown,
+                };
+                wrapped_callback(response, message.toSlice(), _userdata);
+            }
+        };
+
+        return RequestDeviceCallbackInfo {
+            // TODO: Revisit this default if/when Instance.waitAny() is implemented.
+            .mode = mode orelse CallbackMode.allow_process_events,
+
+            .callback = Trampoline.cb,
+            .userdata1 = @ptrCast(userdata),
+            .userdata2 = @constCast(@ptrCast(callback)),
+        };
+    }
 };
 
-pub fn MakeRequestDeviceCallbackTrampoline(
-    comptime UserDataPointerType: type,
-) type {
-    const CallbackType = *const fn(RequestDeviceError!*Device, ?[]const u8, UserDataPointerType) void;
-    return struct {
-        pub fn callback(status: RequestDeviceStatus, device: ?*Device, message: StringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.C) void {
-            const wrapped_callback: CallbackType = @ptrCast(userdata2);
-            const userdata: UserDataPointerType = @ptrCast(@alignCast(userdata1));
-            const response: RequestDeviceError!*Device = switch (status) {
-                .success => device.?,
-                .instance_dropped => RequestDeviceError.RequestDeviceInstanceDropped,
-                .@"error" => RequestDeviceError.RequestDeviceError,
-                .unknown => RequestDeviceError.RequestDeviceUnknown,
-            };
-            wrapped_callback(response, message.toSlice(), userdata);
-        }
-    };
-}
 
 pub const PopErrorScopeStatus = enum(u32) {
     success          = 0x00000001, // The error scope stack was successfully popped and a result was reported.
