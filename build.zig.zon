@@ -15,6 +15,16 @@
             .hash = "N-V-__8AAJLttgMT05WocIA-7lzJ0aXNv39ddKg-uX_jpWd6",
             .lazy = true,
         },
+        .wgpu_windows_x86_64_gnu_debug = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v25.0.2.2/wgpu-windows-x86_64-gnu-debug.zip",
+            .hash = "N-V-__8AABHkhRLCoupPKqkoZDvtoEuuo_ksZbtSuxAUhT6o",
+            .lazy = true,
+        },
+        .wgpu_windows_x86_64_gnu_release = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v25.0.2.2/wgpu-windows-x86_64-gnu-release.zip",
+            .hash = "N-V-__8AAAyVDwPr3Pkxq37dS6b6mUsUAA36kKDJZyjlUTII",
+            .lazy = true,
+        },
     },
 
     .paths = .{
