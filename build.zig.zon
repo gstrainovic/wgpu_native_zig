@@ -5,9 +5,12 @@
     .minimum_zig_version = "0.14.0",
 
     .dependencies = .{
+        // WORKAROUND: Use release binaries for debug builds on Linux because
+        // wgpu-native debug builds crash with "General protection exception" 
+        // in device_from_raw on this system (Intel UHD 630 / NVIDIA Quadro P1000).
         .wgpu_linux_x86_64_debug = .{
-            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v25.0.2.2/wgpu-linux-x86_64-debug.zip",
-            .hash = "N-V-__8AAPJiMRQQlWQnbp3dr2CbAsi6JXUkpiQcfVK2yPlW",
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v25.0.2.2/wgpu-linux-x86_64-release.zip",
+            .hash = "N-V-__8AAJLttgMT05WocIA-7lzJ0aXNv39ddKg-uX_jpWd6",
             .lazy = true,
         },
         .wgpu_linux_x86_64_release = .{
